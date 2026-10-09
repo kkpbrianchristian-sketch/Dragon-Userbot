@@ -36,6 +36,7 @@ if script_path != os.getcwd():
 
 app = Client(
     "my_account",
+    session_string=os.environ.get("SESSION_STRING"),
     api_id=config.api_id,
     api_hash=config.api_hash,
     hide_password=True,
