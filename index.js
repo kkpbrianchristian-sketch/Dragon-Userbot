@@ -10,6 +10,39 @@ const pino = require("pino");
 const MONGO_URI = process.env.DATABASE_URL;
 const PHONE_NUMBER = process.env.PHONE_NUMBER;
 
+// Helper untuk membongkar segala jenis pembungkus pesan WhatsApp
+function extractMessageText(m) {
+  if (!m || !m.message) return "";
+  let msg = m.message;
+
+  // 1. Bongkar sinkronisasi pesan dari HP utama (Multi-Device sync)
+  if (msg.deviceSentMessage?.message) {
+    msg = msg.deviceSentMessage.message;
+  }
+
+  // 2. Bongkar disappearing messages (pesan sementara)
+  if (msg.ephemeralMessage?.message) {
+    msg = msg.ephemeralMessage.message;
+  }
+
+  // 3. Bongkar view-once jika ada
+  if (msg.viewOnceMessage?.message) {
+    msg = msg.viewOnceMessage.message;
+  }
+  if (msg.viewOnceMessageV2?.message) {
+    msg = msg.viewOnceMessageV2.message;
+  }
+
+  // Ambil teks utama
+  return (
+    msg.conversation ||
+    msg.extendedTextMessage?.text ||
+    msg.imageMessage?.caption ||
+    msg.videoMessage?.caption ||
+    ""
+  );
+}
+
 async function startBot() {
   const client = new MongoClient(MONGO_URI);
   await client.connect();
@@ -60,35 +93,31 @@ async function startBot() {
     }
   });
 
-  // Tangani pesan masuk / keluar
+  // Tangani semua pesan masuk / tersinkronisasi
   sock.ev.on("messages.upsert", async ({ messages }) => {
-    const m = messages[0];
-    if (!m || !m.message) return;
+    for (const m of messages) {
+      if (!m || !m.message) continue;
 
-    // Filter khusus: hanya proses chat yang dikirim oleh nomor kamu sendiri
-    if (!m.key.fromMe) return;
+      // Filter: Hanya proses pesan yang dikirim oleh nomor kamu sendiri
+      if (!m.key.fromMe) continue;
 
-    // Buka pembungkus pesan teks (mendukung pesan biasa, mention, dan disappearing messages)
-    const rawMsg = m.message.ephemeralMessage?.message || m.message;
-    const body = 
-      rawMsg.conversation || 
-      rawMsg.extendedTextMessage?.text || 
-      "";
+      const body = extractMessageText(m);
+      const cleanBody = body.trim().toLowerCase();
 
-    const cleanBody = body.trim().toLowerCase();
+      // Log pelacak jika ada pesan keluar dari nomor kamu
+      if (cleanBody) {
+        console.log(`[OUTGOING CHAT]: "${cleanBody}" | Target: ${m.key.remoteJid}`);
+      }
 
-    // Log ke terminal Heroku untuk memastikan ketikan kamu tertangkap sistem
-    if (cleanBody.startsWith(".")) {
-      console.log(`[USERBOT COMMAND DETECTED]: ${cleanBody} di chat: ${m.key.remoteJid}`);
-    }
-
-    if (cleanBody === ".ping") {
-      try {
-        // Kirim tanpa { quoted: m } agar tidak bentrok dengan stanza fromMe
-        await sock.sendMessage(m.key.remoteJid, { text: "Pong dari Heroku!" });
-        console.log("[USERBOT]: Balasan Pong berhasil terkirim!");
-      } catch (err) {
-        console.error("[USERBOT ERROR saat kirim pesan]:", err);
+      // Perintah .ping
+      if (cleanBody === ".ping") {
+        try {
+          console.log("[USERBOT]: Perintah .ping terdeteksi, membalas...");
+          await sock.sendMessage(m.key.remoteJid, { text: "Pong dari Heroku!" });
+          console.log("[USERBOT]: Balasan berhasil terkirim!");
+        } catch (err) {
+          console.error("[USERBOT ERROR kirim pesan]:", err);
+        }
       }
     }
   });
