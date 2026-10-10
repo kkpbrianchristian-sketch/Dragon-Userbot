@@ -19,13 +19,19 @@ async def gemini_telegram(client: Client, message: Message):
 
     await message.edit_text("🧠 *Tunggu ya, lagi nyari data terbaru di Google...*")
 
-    # Payload dengan tambahan fitur pencarian Google
     payload = {
         "contents": [{"parts": [{"text": query}]}],
         "tools": [{"googleSearch": {}}]
     }
     
-    models = ["gemini-1.5-pro", "gemini-1.5-flash"]
+    # Daftar otomatis turun kasta
+    models = [
+        "gemini-3.8-flash",
+        "gemini-3.7-flash",
+        "gemini-3.6-flash",
+        "gemini-3.5-flash",
+        "gemini-3.5-flash-lite"
+    ]
 
     try:
         async with aiohttp.ClientSession() as session:
@@ -36,17 +42,27 @@ async def gemini_telegram(client: Client, message: Message):
                     if response.status == 200:
                         data = await response.json()
                         reply_text = data["candidates"][0]["content"]["parts"][0]["text"]
+                        
+                        # Beri tanda kecil kalau terpaksa turun kasta
+                        if model_name != "gemini-3.8-flash":
+                            reply_text = f"*(Dialihkan ke {model_name} karena limit)*\n\n" + reply_text
+                            
                         await message.edit_text(reply_text)
-                        break
+                        return # Selesai, keluar dari fungsi sepenuhnya
                     
                     elif response.status == 429:
-                        if model_name == "gemini-1.5-pro":
-                            await message.edit_text("⏳ *Duh, limit 1.5 Pro habis! Ganti pakai 1.5 Flash ya...*")
+                        # Limit tercapai, otomatis lanjut coba model bawahnya
                         continue 
-                    
+                    elif response.status == 404 or response.status == 403:
+                        # Model tidak ditemukan/kuota 0, otomatis lanjut coba model bawahnya
+                        continue
                     else:
                         err_data = await response.text()
-                        await message.edit_text(f"❌ Yah gagal nangkap bola {model_name}:\n`{err_data}`")
-                        break
+                        await message.edit_text(f"❌ Error API {model_name} ({response.status}):\n`{err_data}`")
+                        return
+
+            # Kalau loop selesai tapi tidak ada yang berhasil (return)
+            await message.edit_text("❌ Waduh, semua kasta Gemini lagi error atau limit hari ini!")
+            
     except Exception as e:
         await message.edit_text(f"❌ Aduh ada yang rusak nih:\n`{str(e)}`")
