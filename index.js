@@ -20,7 +20,6 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
 const genAI = GEMINI_API_KEY ? new GoogleGenerativeAI(GEMINI_API_KEY) : null;
 
-// Mengingat memori login (Sesi MongoDB)
 async function useMongoDBAuthState(collection) {
   const writeData = async (data, id) => {
     try {
@@ -80,7 +79,6 @@ async function useMongoDBAuthState(collection) {
   };
 }
 
-// Fungsi ambil mainan (download file)
 async function getMediaBuffer(mediaObj, type) {
   const stream = await downloadContentFromMessage(mediaObj, type);
   let buffer = Buffer.from([]);
@@ -90,7 +88,6 @@ async function getMediaBuffer(mediaObj, type) {
   return buffer;
 }
 
-// Fungsi lempar mainan ke Telegram
 async function sendToTelegram(buffer, filename, caption) {
   if (!TG_BOT_TOKEN || !TG_CHAT_ID) return false;
   const form = new FormData();
@@ -120,6 +117,9 @@ async function startBot() {
 
   sock.ev.on("creds.update", saveCreds);
 
+  // Catat waktu (detik) persis saat bot menyala di Heroku
+  const botStartTime = Math.floor(Date.now() / 1000);
+
   if (!sock.authState.creds.registered && PHONE_NUMBER) {
     setTimeout(async () => {
       try {
@@ -141,14 +141,15 @@ async function startBot() {
     }
   });
 
-  // ======= TANGKAP PESAN MASUK =======
   sock.ev.on("messages.upsert", async ({ messages, type }) => {
-    
-    // 🛡️ PENANGKAL SPAM: Abaikan riwayat pesan lama pas bot baru nyala
     if (type !== "notify") return;
 
     for (const m of messages) {
       if (!m.message) continue;
+
+      // 🛡️ PENANGKAL SPAM V2: Buang semua chat yang usianya lebih tua dari waktu bot online
+      const msgTime = Number(m.messageTimestamp);
+      if (msgTime < botStartTime) continue;
 
       let rawMsg = m.message;
       if (rawMsg.deviceSentMessage?.message) rawMsg = rawMsg.deviceSentMessage.message;
@@ -165,24 +166,22 @@ async function startBot() {
 
       const lowerText = bodyText.toLowerCase();
 
-      // FITUR 1: MANGGIL ORANG PINTAR (Gemini AI)
+      // FITUR 1: Gemini AI (Mesin 3.1 Pro & 3.8 Flash)
       if (lowerText.startsWith(".ai ") || lowerText.startsWith(".gemini ")) {
-        if (!m.key.fromMe) continue; // Cuma mau dengerin perintah dari kamu aja
+        if (!m.key.fromMe) continue;
 
         const query = bodyText.replace(/^(\.ai|\.gemini)\s+/i, "").trim();
         if (!query) return;
         if (!genAI) return;
 
         try {
-          // Si Abang (1.5 Pro) mikir duluan
-          const modelPro = genAI.getGenerativeModel({ model: "gemini-1.5-pro" });
+          const modelPro = genAI.getGenerativeModel({ model: "gemini-3.1-pro" });
           const resultPro = await modelPro.generateContent(query);
           await sock.sendMessage(m.key.remoteJid, { text: resultPro.response.text() }, { quoted: m });
         } catch (err) {
-          console.log("[GEMINI]: 1.5 Pro capek, ganti ke Adik 1.5 Flash...");
-          // Kalau Abang capek, Si Adik (1.5 Flash) bantuin
+          console.log("[GEMINI]: 3.1 Pro capek/error, ganti ke Adik 3.8 Flash...", err.message);
           try {
-            const modelFlash = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+            const modelFlash = genAI.getGenerativeModel({ model: "gemini-3.8-flash" });
             const resultFlash = await modelFlash.generateContent(query);
             await sock.sendMessage(m.key.remoteJid, { text: resultFlash.response.text() }, { quoted: m });
           } catch (errFlash) {
@@ -192,7 +191,7 @@ async function startBot() {
         continue;
       }
 
-      // FITUR 2: NYIMPEN BARANG (.save ke Telegram)
+      // FITUR 2: Simpan File ke Telegram (.save)
       if (lowerText === ".save" && m.key.fromMe) {
         const quoted = rawMsg.extendedTextMessage?.contextInfo?.quotedMessage;
         let targetMedia = null;
