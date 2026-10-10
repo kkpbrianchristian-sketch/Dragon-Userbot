@@ -166,7 +166,7 @@ async function startBot() {
 
       const lowerText = bodyText.toLowerCase();
 
-      // FITUR 1: Gemini AI (Mesin 3.1 Pro & 3.8 Flash)
+      // FITUR 1: Gemini AI dengan Google Search
       if (lowerText.startsWith(".ai ") || lowerText.startsWith(".gemini ")) {
         if (!m.key.fromMe) continue;
 
@@ -175,13 +175,19 @@ async function startBot() {
         if (!genAI) return;
 
         try {
-          const modelPro = genAI.getGenerativeModel({ model: "gemini-3.1-pro" });
+          const modelPro = genAI.getGenerativeModel({ 
+            model: "gemini-1.5-pro",
+            tools: [{ googleSearch: {} }] 
+          });
           const resultPro = await modelPro.generateContent(query);
           await sock.sendMessage(m.key.remoteJid, { text: resultPro.response.text() }, { quoted: m });
         } catch (err) {
-          console.log("[GEMINI]: 3.1 Pro capek/error, ganti ke Adik 3.8 Flash...", err.message);
+          console.log("[GEMINI]: 1.5 Pro capek/error, ganti ke Adik 1.5 Flash...", err.message);
           try {
-            const modelFlash = genAI.getGenerativeModel({ model: "gemini-3.8-flash" });
+            const modelFlash = genAI.getGenerativeModel({ 
+              model: "gemini-1.5-flash",
+              tools: [{ googleSearch: {} }] 
+            });
             const resultFlash = await modelFlash.generateContent(query);
             await sock.sendMessage(m.key.remoteJid, { text: resultFlash.response.text() }, { quoted: m });
           } catch (errFlash) {
