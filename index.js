@@ -20,6 +20,9 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
 const genAI = GEMINI_API_KEY ? new GoogleGenerativeAI(GEMINI_API_KEY) : null;
 
+// Buku Absen untuk mencatat pesan yang sudah dibalas
+const processedMsgIds = new Set();
+
 async function useMongoDBAuthState(collection) {
   const writeData = async (data, id) => {
     try {
@@ -117,7 +120,6 @@ async function startBot() {
 
   sock.ev.on("creds.update", saveCreds);
 
-  // Catat waktu (detik) persis saat bot menyala di Heroku
   const botStartTime = Math.floor(Date.now() / 1000);
 
   if (!sock.authState.creds.registered && PHONE_NUMBER) {
@@ -147,7 +149,12 @@ async function startBot() {
     for (const m of messages) {
       if (!m.message) continue;
 
-      // 🛡️ PENANGKAL SPAM V2: Buang semua chat lama yang masuk waktu bot mati
+      // 🛡️ PENANGKAL SPAM V3: Blokir ID Pesan yang sudah pernah diproses
+      const msgId = m.key.id;
+      if (processedMsgIds.has(msgId)) continue;
+      processedMsgIds.add(msgId);
+
+      // 🛡️ PENANGKAL SPAM V2 (Tetap aktif): Blokir pesan lama saat bot mati
       const msgTime = Number(m.messageTimestamp);
       if (msgTime < botStartTime) continue;
 
@@ -166,7 +173,7 @@ async function startBot() {
 
       const lowerText = bodyText.toLowerCase();
 
-      // FITUR 1: Gemini AI (Otomatis Turun Kasta TANPA Google Search)
+      // FITUR 1: Gemini AI
       if (lowerText.startsWith(".ai ") || lowerText.startsWith(".gemini ")) {
         if (!m.key.fromMe) continue;
 
@@ -187,7 +194,6 @@ async function startBot() {
         for (const modelName of modelHierarchy) {
           try {
             console.log(`[GEMINI] Mencoba model: ${modelName}`);
-            // Fitur googleSearch dihapus dari sini
             const model = genAI.getGenerativeModel({ model: modelName });
             const result = await model.generateContent(query);
             await sock.sendMessage(m.key.remoteJid, { text: result.response.text() }, { quoted: m });
