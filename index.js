@@ -117,6 +117,7 @@ async function startBot() {
 
   sock.ev.on("creds.update", saveCreds);
 
+  // Catat waktu (detik) persis saat bot menyala di Heroku
   const botStartTime = Math.floor(Date.now() / 1000);
 
   if (!sock.authState.creds.registered && PHONE_NUMBER) {
@@ -146,6 +147,7 @@ async function startBot() {
     for (const m of messages) {
       if (!m.message) continue;
 
+      // 🛡️ PENANGKAL SPAM V2: Buang semua chat lama yang masuk waktu bot mati
       const msgTime = Number(m.messageTimestamp);
       if (msgTime < botStartTime) continue;
 
@@ -164,7 +166,7 @@ async function startBot() {
 
       const lowerText = bodyText.toLowerCase();
 
-      // FITUR 1: Gemini AI dengan Sistem Auto-Turun Kasta (Waterfall)
+      // FITUR 1: Gemini AI (Otomatis Turun Kasta TANPA Google Search)
       if (lowerText.startsWith(".ai ") || lowerText.startsWith(".gemini ")) {
         if (!m.key.fromMe) continue;
 
@@ -172,7 +174,6 @@ async function startBot() {
         if (!query) return;
         if (!genAI) return;
 
-        // Daftar urutan kasta dari yang paling pintar/terbaru sampai ke ban serep
         const modelHierarchy = [
           "gemini-3.8-flash",
           "gemini-3.7-flash",
@@ -183,27 +184,21 @@ async function startBot() {
 
         let success = false;
 
-        // Loop otomatis mencoba model satu per satu
         for (const modelName of modelHierarchy) {
           try {
             console.log(`[GEMINI] Mencoba model: ${modelName}`);
-            const model = genAI.getGenerativeModel({ 
-              model: modelName,
-              tools: [{ googleSearch: {} }] 
-            });
+            // Fitur googleSearch dihapus dari sini
+            const model = genAI.getGenerativeModel({ model: modelName });
             const result = await model.generateContent(query);
             await sock.sendMessage(m.key.remoteJid, { text: result.response.text() }, { quoted: m });
             
-            success = true; // Kalau berhasil, ubah status
-            break; // Stop perulangan, tidak perlu coba model di bawahnya lagi
-            
+            success = true;
+            break; 
           } catch (err) {
             console.log(`[GEMINI ERROR] ${modelName} gagal: ${err.message}. Turun kasta...`);
-            // Kalau error/limit, loop akan otomatis lanjut ke modelName berikutnya
           }
         }
 
-        // Kalau semua model dari 3.8 sampai 3.5 Lite gagal total
         if (!success) {
           await sock.sendMessage(m.key.remoteJid, { text: "Duh, semua versi Gemini lagi capek atau limit kuotanya habis total hari ini." }, { quoted: m });
         }
