@@ -17,14 +17,13 @@ async def gemini_telegram(client: Client, message: Message):
         await message.edit_text("❌ Kunci GEMINI_API_KEY belum dipasang di perut Heroku!")
         return
 
-    await message.edit_text("🧠 *Tunggu ya, lagi nyari data terbaru di Google...*")
+    await message.edit_text("🧠 *Tunggu ya, lagi mikir keras...*")
 
+    # Payload polosan tanpa embel-embel alat pencarian
     payload = {
-        "contents": [{"parts": [{"text": query}]}],
-        "tools": [{"googleSearch": {}}]
+        "contents": [{"parts": [{"text": query}]}]
     }
     
-    # Daftar otomatis turun kasta
     models = [
         "gemini-3.8-flash",
         "gemini-3.7-flash",
@@ -43,25 +42,20 @@ async def gemini_telegram(client: Client, message: Message):
                         data = await response.json()
                         reply_text = data["candidates"][0]["content"]["parts"][0]["text"]
                         
-                        # Beri tanda kecil kalau terpaksa turun kasta
                         if model_name != "gemini-3.8-flash":
                             reply_text = f"*(Dialihkan ke {model_name} karena limit)*\n\n" + reply_text
                             
                         await message.edit_text(reply_text)
-                        return # Selesai, keluar dari fungsi sepenuhnya
+                        return
                     
-                    elif response.status == 429:
-                        # Limit tercapai, otomatis lanjut coba model bawahnya
+                    # Tambahan angka 400 dan 403 untuk menangkap penolakan fitur
+                    elif response.status in [429, 404, 403, 400]:
                         continue 
-                    elif response.status == 404 or response.status == 403:
-                        # Model tidak ditemukan/kuota 0, otomatis lanjut coba model bawahnya
-                        continue
                     else:
                         err_data = await response.text()
                         await message.edit_text(f"❌ Error API {model_name} ({response.status}):\n`{err_data}`")
                         return
 
-            # Kalau loop selesai tapi tidak ada yang berhasil (return)
             await message.edit_text("❌ Waduh, semua kasta Gemini lagi error atau limit hari ini!")
             
     except Exception as e:
