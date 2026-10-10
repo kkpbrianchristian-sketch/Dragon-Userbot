@@ -117,7 +117,6 @@ async function startBot() {
 
   sock.ev.on("creds.update", saveCreds);
 
-  // Catat waktu (detik) persis saat bot menyala di Heroku
   const botStartTime = Math.floor(Date.now() / 1000);
 
   if (!sock.authState.creds.registered && PHONE_NUMBER) {
@@ -147,7 +146,6 @@ async function startBot() {
     for (const m of messages) {
       if (!m.message) continue;
 
-      // 🛡️ PENANGKAL SPAM V2: Buang semua chat yang usianya lebih tua dari waktu bot online
       const msgTime = Number(m.messageTimestamp);
       if (msgTime < botStartTime) continue;
 
@@ -166,7 +164,7 @@ async function startBot() {
 
       const lowerText = bodyText.toLowerCase();
 
-      // FITUR 1: Gemini AI dengan Google Search
+      // FITUR 1: Gemini AI dengan Sistem Auto-Turun Kasta (Waterfall)
       if (lowerText.startsWith(".ai ") || lowerText.startsWith(".gemini ")) {
         if (!m.key.fromMe) continue;
 
@@ -174,25 +172,40 @@ async function startBot() {
         if (!query) return;
         if (!genAI) return;
 
-        try {
-          const modelPro = genAI.getGenerativeModel({ 
-            model: "gemini-1.5-pro",
-            tools: [{ googleSearch: {} }] 
-          });
-          const resultPro = await modelPro.generateContent(query);
-          await sock.sendMessage(m.key.remoteJid, { text: resultPro.response.text() }, { quoted: m });
-        } catch (err) {
-          console.log("[GEMINI]: 1.5 Pro capek/error, ganti ke Adik 1.5 Flash...", err.message);
+        // Daftar urutan kasta dari yang paling pintar/terbaru sampai ke ban serep
+        const modelHierarchy = [
+          "gemini-3.8-flash",
+          "gemini-3.7-flash",
+          "gemini-3.6-flash",
+          "gemini-3.5-flash",
+          "gemini-3.5-flash-lite"
+        ];
+
+        let success = false;
+
+        // Loop otomatis mencoba model satu per satu
+        for (const modelName of modelHierarchy) {
           try {
-            const modelFlash = genAI.getGenerativeModel({ 
-              model: "gemini-1.5-flash",
+            console.log(`[GEMINI] Mencoba model: ${modelName}`);
+            const model = genAI.getGenerativeModel({ 
+              model: modelName,
               tools: [{ googleSearch: {} }] 
             });
-            const resultFlash = await modelFlash.generateContent(query);
-            await sock.sendMessage(m.key.remoteJid, { text: resultFlash.response.text() }, { quoted: m });
-          } catch (errFlash) {
-            await sock.sendMessage(m.key.remoteJid, { text: `Duh, dua-duanya lagi pusing: ${errFlash.message}` });
+            const result = await model.generateContent(query);
+            await sock.sendMessage(m.key.remoteJid, { text: result.response.text() }, { quoted: m });
+            
+            success = true; // Kalau berhasil, ubah status
+            break; // Stop perulangan, tidak perlu coba model di bawahnya lagi
+            
+          } catch (err) {
+            console.log(`[GEMINI ERROR] ${modelName} gagal: ${err.message}. Turun kasta...`);
+            // Kalau error/limit, loop akan otomatis lanjut ke modelName berikutnya
           }
+        }
+
+        // Kalau semua model dari 3.8 sampai 3.5 Lite gagal total
+        if (!success) {
+          await sock.sendMessage(m.key.remoteJid, { text: "Duh, semua versi Gemini lagi capek atau limit kuotanya habis total hari ini." }, { quoted: m });
         }
         continue;
       }
