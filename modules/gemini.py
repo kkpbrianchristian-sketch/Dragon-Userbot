@@ -14,15 +14,18 @@ async def gemini_telegram(client: Client, message: Message):
     query = message.text.split(maxsplit=1)[1]
 
     if not GEMINI_API_KEY:
-        await message.edit_text("❌ Kunci kunci GEMINI_API_KEY belum dipasang di perut Heroku!")
+        await message.edit_text("❌ Kunci GEMINI_API_KEY belum dipasang di perut Heroku!")
         return
 
-    await message.edit_text("🧠 *Tunggu ya, lagi mikir keras...*")
+    await message.edit_text("🧠 *Tunggu ya, lagi nyari data terbaru di Google...*")
 
-    payload = {"contents": [{"parts": [{"text": query}]}]}
+    # Payload dengan tambahan fitur pencarian Google
+    payload = {
+        "contents": [{"parts": [{"text": query}]}],
+        "tools": [{"googleSearch": {}}]
+    }
     
-    # Abang "Pro" maju duluan, Adik "Flash" nunggu giliran
-    models = ["gemini-3.1-pro", "gemini-3.8-flash"]
+    models = ["gemini-1.5-pro", "gemini-1.5-flash"]
 
     try:
         async with aiohttp.ClientSession() as session:
@@ -34,12 +37,11 @@ async def gemini_telegram(client: Client, message: Message):
                         data = await response.json()
                         reply_text = data["candidates"][0]["content"]["parts"][0]["text"]
                         await message.edit_text(reply_text)
-                        break  # Hore berhasil jawab! Keluar barisan.
+                        break
                     
                     elif response.status == 429:
-                        # Waduh Abang capek (limit), kasih tahu sebentar trus Adik maju.
-                        if model_name == "gemini-3.1-pro":
-                            await message.edit_text("⏳ *Duh, limit 3.1 Pro habis! Ganti pakai 3.8 Flash ya...*")
+                        if model_name == "gemini-1.5-pro":
+                            await message.edit_text("⏳ *Duh, limit 1.5 Pro habis! Ganti pakai 1.5 Flash ya...*")
                         continue 
                     
                     else:
