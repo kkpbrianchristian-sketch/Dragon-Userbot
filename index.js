@@ -122,8 +122,12 @@ async function startBot() {
 
   if (!sock.authState.creds.registered && PHONE_NUMBER) {
     setTimeout(async () => {
-      const code = await sock.requestPairingCode(PHONE_NUMBER);
-      console.log(`\n>>> KODE PAIRING WA: ${code} <<<\n`);
+      try {
+        const code = await sock.requestPairingCode(PHONE_NUMBER);
+        console.log(`\n>>> KODE PAIRING WA: ${code} <<<\n`);
+      } catch (e) {
+        console.log("Gagal request pairing code:", e.message);
+      }
     }, 4000);
   }
 
@@ -137,7 +141,12 @@ async function startBot() {
     }
   });
 
-  sock.ev.on("messages.upsert", async ({ messages }) => {
+  // ======= TANGKAP PESAN MASUK =======
+  sock.ev.on("messages.upsert", async ({ messages, type }) => {
+    
+    // 🛡️ PENANGKAL SPAM: Abaikan riwayat pesan lama pas bot baru nyala
+    if (type !== "notify") return;
+
     for (const m of messages) {
       if (!m.message) continue;
 
@@ -156,23 +165,24 @@ async function startBot() {
 
       const lowerText = bodyText.toLowerCase();
 
-      // MANGGIL ORANG PINTAR (Gemini AI)
+      // FITUR 1: MANGGIL ORANG PINTAR (Gemini AI)
       if (lowerText.startsWith(".ai ") || lowerText.startsWith(".gemini ")) {
-        if (!m.key.fromMe) continue; // Cuma mau dengerin suara kamu aja
+        if (!m.key.fromMe) continue; // Cuma mau dengerin perintah dari kamu aja
 
         const query = bodyText.replace(/^(\.ai|\.gemini)\s+/i, "").trim();
         if (!query) return;
         if (!genAI) return;
 
         try {
-          // Si Abang (3.1 Pro) mikir duluan
-          const modelPro = genAI.getGenerativeModel({ model: "gemini-3.1-pro" });
+          // Si Abang (1.5 Pro) mikir duluan
+          const modelPro = genAI.getGenerativeModel({ model: "gemini-1.5-pro" });
           const resultPro = await modelPro.generateContent(query);
           await sock.sendMessage(m.key.remoteJid, { text: resultPro.response.text() }, { quoted: m });
         } catch (err) {
-          // Kalau Abang capek, Si Adik (3.8 Flash) bantuin
+          console.log("[GEMINI]: 1.5 Pro capek, ganti ke Adik 1.5 Flash...");
+          // Kalau Abang capek, Si Adik (1.5 Flash) bantuin
           try {
-            const modelFlash = genAI.getGenerativeModel({ model: "gemini-3.8-flash" });
+            const modelFlash = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
             const resultFlash = await modelFlash.generateContent(query);
             await sock.sendMessage(m.key.remoteJid, { text: resultFlash.response.text() }, { quoted: m });
           } catch (errFlash) {
@@ -182,7 +192,7 @@ async function startBot() {
         continue;
       }
 
-      // NYIMPEN BARANG (.save ke Telegram)
+      // FITUR 2: NYIMPEN BARANG (.save ke Telegram)
       if (lowerText === ".save" && m.key.fromMe) {
         const quoted = rawMsg.extendedTextMessage?.contextInfo?.quotedMessage;
         let targetMedia = null;
@@ -212,7 +222,9 @@ async function startBot() {
           if (sukses) {
             await sock.sendMessage(m.key.remoteJid, { text: `Yeay! ${fileName} udah masuk ke Telegram!` });
           }
-        } catch (err) {}
+        } catch (err) {
+          console.error("[ERROR SAVE]:", err);
+        }
       }
     }
   });
