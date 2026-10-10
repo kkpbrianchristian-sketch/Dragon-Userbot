@@ -7,6 +7,7 @@ const {
   downloadContentFromMessage 
 } = require("@whiskeysockets/baileys");
 const { MongoClient } = require("mongodb");
+const { GoogleGenerativeAI } = require("@google/generative-ai");
 const pino = require("pino");
 const fetch = require("node-fetch");
 const FormData = require("form-data");
@@ -15,8 +16,11 @@ const MONGO_URI = process.env.DATABASE_URL;
 const PHONE_NUMBER = process.env.PHONE_NUMBER;
 const TG_BOT_TOKEN = process.env.TG_BOT_TOKEN;
 const TG_CHAT_ID = process.env.TG_CHAT_ID;
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
-// Adapter lengkap MongoDB untuk menyimpan creds dan kunci enkripsi (keys)
+const genAI = GEMINI_API_KEY ? new GoogleGenerativeAI(GEMINI_API_KEY) : null;
+
+// Mengingat memori login (Sesi MongoDB)
 async function useMongoDBAuthState(collection) {
   const writeData = async (data, id) => {
     try {
@@ -25,9 +29,7 @@ async function useMongoDBAuthState(collection) {
         { $set: { data: JSON.stringify(data, BufferJSON.replacer) } },
         { upsert: true }
       );
-    } catch (err) {
-      console.error("[MONGO WRITE ERROR]:", err.message);
-    }
+    } catch (err) {}
   };
 
   const readData = async (id) => {
@@ -35,15 +37,11 @@ async function useMongoDBAuthState(collection) {
       const res = await collection.findOne({ _id: id });
       if (!res?.data) return null;
       return JSON.parse(res.data, BufferJSON.reviver);
-    } catch {
-      return null;
-    }
+    } catch { return null; }
   };
 
   const removeData = async (id) => {
-    try {
-      await collection.deleteOne({ _id: id });
-    } catch {}
+    try { await collection.deleteOne({ _id: id }); } catch {}
   };
 
   const creds = (await readData("creds")) || initAuthCreds();
@@ -82,7 +80,7 @@ async function useMongoDBAuthState(collection) {
   };
 }
 
-// Unduh file/media langsung dari stream Baileys
+// Fungsi ambil mainan (download file)
 async function getMediaBuffer(mediaObj, type) {
   const stream = await downloadContentFromMessage(mediaObj, type);
   let buffer = Buffer.from([]);
@@ -92,13 +90,9 @@ async function getMediaBuffer(mediaObj, type) {
   return buffer;
 }
 
-// Kirim dokumen ke API Telegram
+// Fungsi lempar mainan ke Telegram
 async function sendToTelegram(buffer, filename, caption) {
-  if (!TG_BOT_TOKEN || !TG_CHAT_ID) {
-    console.error("[TELEGRAM ERROR]: TG_BOT_TOKEN atau TG_CHAT_ID belum diisi di Heroku!");
-    return false;
-  }
-
+  if (!TG_BOT_TOKEN || !TG_CHAT_ID) return false;
   const form = new FormData();
   form.append("chat_id", TG_CHAT_ID);
   form.append("document", buffer, { filename: filename || "dokumen.bin" });
@@ -106,22 +100,17 @@ async function sendToTelegram(buffer, filename, caption) {
 
   try {
     const res = await fetch(`https://api.telegram.org/bot${TG_BOT_TOKEN}/sendDocument`, {
-      method: "POST",
-      body: form
+      method: "POST", body: form
     });
     const result = await res.json();
     return result.ok;
-  } catch (err) {
-    console.error("[TELEGRAM UPLOAD ERROR]:", err.message);
-    return false;
-  }
+  } catch { return false; }
 }
 
 async function startBot() {
   const client = new MongoClient(MONGO_URI);
   await client.connect();
   const collection = client.db("dragonbot").collection("wa_session");
-
   const { state, saveCreds } = await useMongoDBAuthState(collection);
 
   const sock = makeWASocket({
@@ -134,9 +123,7 @@ async function startBot() {
   if (!sock.authState.creds.registered && PHONE_NUMBER) {
     setTimeout(async () => {
       const code = await sock.requestPairingCode(PHONE_NUMBER);
-      console.log(`\n========================================`);
-      console.log(`>>> KODE PAIRING WA ANDA: ${code} <<<`);
-      console.log(`========================================\n`);
+      console.log(`\n>>> KODE PAIRING WA: ${code} <<<\n`);
     }, 4000);
   }
 
@@ -144,17 +131,13 @@ async function startBot() {
     const { connection, lastDisconnect } = update;
     if (connection === "close") {
       const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-      if (shouldReconnect) {
-        startBot();
-      } else {
-        console.log("Koneksi ditutup permanen atau di-logout dari HP.");
-      }
+      if (shouldReconnect) startBot();
     } else if (connection === "open") {
-      console.log("WhatsApp bot siap! Kirim atau balas file dengan .save");
+      console.log("Hore! WA Bot sudah bangun!");
     }
   });
 
-  sock.ev.on("messages.upsert", async ({ messages, type }) => {
+  sock.ev.on("messages.upsert", async ({ messages }) => {
     for (const m of messages) {
       if (!m.message) continue;
 
@@ -169,79 +152,67 @@ async function startBot() {
         rawMsg.documentMessage?.caption ||
         rawMsg.documentWithCaptionMessage?.message?.documentMessage?.caption ||
         ""
-      ).trim().toLowerCase();
+      ).trim();
 
-      // Log pemantau setiap kali ada chat masuk/keluar
-      console.log(`[LOG CHAT] fromMe: ${m.key.fromMe} | Teks: "${bodyText}" | Target: ${m.key.remoteJid}`);
+      const lowerText = bodyText.toLowerCase();
 
-      if (bodyText !== ".save") continue;
+      // MANGGIL ORANG PINTAR (Gemini AI)
+      if (lowerText.startsWith(".ai ") || lowerText.startsWith(".gemini ")) {
+        if (!m.key.fromMe) continue; // Cuma mau dengerin suara kamu aja
 
-      console.log("[USERBOT]: Perintah .save terdeteksi! Memeriksa lampiran...");
+        const query = bodyText.replace(/^(\.ai|\.gemini)\s+/i, "").trim();
+        if (!query) return;
+        if (!genAI) return;
 
-      const quoted = rawMsg.extendedTextMessage?.contextInfo?.quotedMessage;
-      let targetMedia = null;
-      let mediaType = "";
-      let fileName = "file_wa";
-
-      // Kasus 1: Me-reply chat yang berisi dokumen/media
-      if (quoted) {
-        let qMsg = quoted;
-        if (qMsg.ephemeralMessage?.message) qMsg = qMsg.ephemeralMessage.message;
-
-        const doc = qMsg.documentMessage || qMsg.documentWithCaptionMessage?.message?.documentMessage;
-        if (doc) {
-          targetMedia = doc;
-          mediaType = "document";
-          fileName = doc.fileName || "dokumen.pdf";
-        } else if (qMsg.imageMessage) {
-          targetMedia = qMsg.imageMessage;
-          mediaType = "image";
-          fileName = `foto_${Date.now()}.jpg`;
-        } else if (qMsg.videoMessage) {
-          targetMedia = qMsg.videoMessage;
-          mediaType = "video";
-          fileName = `video_${Date.now()}.mp4`;
+        try {
+          // Si Abang (3.1 Pro) mikir duluan
+          const modelPro = genAI.getGenerativeModel({ model: "gemini-3.1-pro" });
+          const resultPro = await modelPro.generateContent(query);
+          await sock.sendMessage(m.key.remoteJid, { text: resultPro.response.text() }, { quoted: m });
+        } catch (err) {
+          // Kalau Abang capek, Si Adik (3.8 Flash) bantuin
+          try {
+            const modelFlash = genAI.getGenerativeModel({ model: "gemini-3.8-flash" });
+            const resultFlash = await modelFlash.generateContent(query);
+            await sock.sendMessage(m.key.remoteJid, { text: resultFlash.response.text() }, { quoted: m });
+          } catch (errFlash) {
+            await sock.sendMessage(m.key.remoteJid, { text: `Duh, dua-duanya lagi pusing: ${errFlash.message}` });
+          }
         }
-      } 
-      // Kasus 2: Kirim dokumen langsung dengan caption .save
-      else {
-        const doc = rawMsg.documentMessage || rawMsg.documentWithCaptionMessage?.message?.documentMessage;
-        if (doc) {
-          targetMedia = doc;
-          mediaType = "document";
-          fileName = doc.fileName || "dokumen.pdf";
-        } else if (rawMsg.imageMessage) {
-          targetMedia = rawMsg.imageMessage;
-          mediaType = "image";
-          fileName = `foto_${Date.now()}.jpg`;
-        } else if (rawMsg.videoMessage) {
-          targetMedia = rawMsg.videoMessage;
-          mediaType = "video";
-          fileName = `video_${Date.now()}.mp4`;
-        }
-      }
-
-      if (!targetMedia) {
-        await sock.sendMessage(m.key.remoteJid, { text: "Kutip (reply) pesan file/gambar lalu ketik .save" });
         continue;
       }
 
-      try {
-        console.log(`[USERBOT]: Mengunduh ${fileName} (${mediaType})...`);
-        const buffer = await getMediaBuffer(targetMedia, mediaType);
+      // NYIMPEN BARANG (.save ke Telegram)
+      if (lowerText === ".save" && m.key.fromMe) {
+        const quoted = rawMsg.extendedTextMessage?.contextInfo?.quotedMessage;
+        let targetMedia = null;
+        let mediaType = "";
+        let fileName = "file_wa";
+        let targetMsg = quoted ? (quoted.ephemeralMessage?.message || quoted) : rawMsg;
 
-        console.log(`[USERBOT]: Mengirim ${fileName} ke Telegram...`);
-        const caption = `*File dari WA:*\n${fileName}\n*Pengirim:* ${m.key.remoteJid}`;
-        const sukses = await sendToTelegram(buffer, fileName, caption);
-
-        if (sukses) {
-          await sock.sendMessage(m.key.remoteJid, { text: `Berhasil diteruskan ke Telegram: ${fileName}` });
-          console.log("[USERBOT]: Selesai diteruskan ke Telegram!");
-        } else {
-          await sock.sendMessage(m.key.remoteJid, { text: "Gagal kirim ke Telegram, cek Config Vars Heroku." });
+        const doc = targetMsg.documentMessage || targetMsg.documentWithCaptionMessage?.message?.documentMessage;
+        if (doc) {
+          targetMedia = doc; mediaType = "document"; fileName = doc.fileName || "dokumen.pdf";
+        } else if (targetMsg.imageMessage) {
+          targetMedia = targetMsg.imageMessage; mediaType = "image"; fileName = `foto_${Date.now()}.jpg`;
+        } else if (targetMsg.videoMessage) {
+          targetMedia = targetMsg.videoMessage; mediaType = "video"; fileName = `video_${Date.now()}.mp4`;
         }
-      } catch (err) {
-        console.error("[USERBOT ERROR UNDUH/KIRIM]:", err);
+
+        if (!targetMedia) {
+          await sock.sendMessage(m.key.remoteJid, { text: "Eh, file-nya mana? Reply dulu pesannya ya!" });
+          continue;
+        }
+
+        try {
+          const buffer = await getMediaBuffer(targetMedia, mediaType);
+          const caption = `*Dapat dari WA nih:*\n${fileName}\n*Dari:* ${m.key.remoteJid}`;
+          const sukses = await sendToTelegram(buffer, fileName, caption);
+
+          if (sukses) {
+            await sock.sendMessage(m.key.remoteJid, { text: `Yeay! ${fileName} udah masuk ke Telegram!` });
+          }
+        } catch (err) {}
       }
     }
   });
